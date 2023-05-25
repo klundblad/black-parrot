@@ -21,6 +21,8 @@
 `include "bsg_cache.vh"
 `include "bsg_noc_links.vh"
 
+`include "/mnt/users/ssd2/homes/klundb/black-parrot-sim/black-parrot/bp_me/src/v/dev/bp_dma_engine.sv"
+
 module bp_unicore
  import bsg_wormhole_router_pkg::*;
  import bp_common_pkg::*;
@@ -98,12 +100,12 @@ module bp_unicore
   always_ff @(posedge clk_i)
     reset_r <= reset_i;
 
-  localparam num_proc_lp = 3;
-  localparam num_dev_lp  = 5;
+  localparam num_proc_lp = 4; // number of proc? number of bp_local_addr_s variables
+  localparam num_dev_lp  = 6; // number of devices
   localparam lg_num_proc_lp = `BSG_SAFE_CLOG2(num_proc_lp);
   localparam lg_num_dev_lp = `BSG_SAFE_CLOG2(num_dev_lp);
 
-  // {IO, BE UCE, FE UCE}
+  // {IO, DMA UCE, BE UCE, FE UCE} DMA UCE is now index 2, IO is now index 4
   bp_bedrock_mem_fwd_header_s [num_proc_lp-1:0] proc_fwd_header_lo;
   logic [num_proc_lp-1:0][uce_fill_width_p-1:0] proc_fwd_data_lo;
   logic [num_proc_lp-1:0] proc_fwd_v_lo, proc_fwd_ready_and_li, proc_fwd_last_lo;
@@ -111,7 +113,9 @@ module bp_unicore
   logic [num_proc_lp-1:0][uce_fill_width_p-1:0] proc_rev_data_li;
   logic [num_proc_lp-1:0] proc_rev_v_li, proc_rev_ready_and_lo, proc_rev_last_li;
 
-  // {LOOPBACK, IO, L2, CLINT, CFG}
+  // {LOOPBACK, DMA, IO, L2, CLINT, CFG} added DMA as a 5th device 
+  // LOOPBACK is now index 5
+  // DMA is now index 4
   bp_bedrock_mem_fwd_header_s [num_dev_lp-1:0] dev_fwd_header_li;
   logic [num_dev_lp-1:0][uce_fill_width_p-1:0] dev_fwd_data_li;
   logic [num_dev_lp-1:0] dev_fwd_v_li, dev_fwd_ready_and_lo, dev_fwd_last_li;
@@ -147,19 +151,22 @@ module bp_unicore
      ,.s_external_irq_i(s_external_irq_li)
      );
 
-  // Assign incoming I/O as basically another UCE interface
-  assign proc_fwd_header_lo[2] = mem_fwd_header_cast_i;
-  assign proc_fwd_data_lo[2] = mem_fwd_data_i;
-  assign proc_fwd_v_lo[2] = mem_fwd_v_i;
-  assign mem_fwd_ready_and_o = proc_fwd_ready_and_li[2];
-  assign proc_fwd_last_lo[2] = mem_fwd_last_i;
+  wire [63:0] dma_address = proc_fwd_header_lo[1].addr; // my logic to view address
+  
+  // Assign incoming I/O as basically another UCE interface 
+  // Changed this to index 3 because DMA is now index 2
+  assign proc_fwd_header_lo[3] = mem_fwd_header_cast_i;
+  assign proc_fwd_data_lo[3] = mem_fwd_data_i;
+  assign proc_fwd_v_lo[3] = mem_fwd_v_i;
+  assign mem_fwd_ready_and_o = proc_fwd_ready_and_li[3];
+  assign proc_fwd_last_lo[3] = mem_fwd_last_i;
 
-  assign mem_rev_header_cast_o = proc_rev_header_li[2];
-  assign mem_rev_data_o = proc_rev_data_li[2];
-  assign mem_rev_v_o = proc_rev_v_li[2];
-  assign proc_rev_ready_and_lo[2] = mem_rev_ready_and_i;
-  assign mem_rev_last_o = proc_rev_last_li[2];
-
+  assign mem_rev_header_cast_o = proc_rev_header_li[3];
+  assign mem_rev_data_o = proc_rev_data_li[3];
+  assign mem_rev_v_o = proc_rev_v_li[3];
+  assign proc_rev_ready_and_lo[3] = mem_rev_ready_and_i;
+  assign mem_rev_last_o = proc_rev_last_li[3];
+  
   // Select destination of commands
   logic [num_proc_lp-1:0][lg_num_dev_lp-1:0] proc_fwd_dst_lo;
   for (genvar i = 0; i < num_proc_lp; i++)
@@ -176,15 +183,29 @@ module bp_unicore
       wire is_clint_fwd    = is_my_core & is_local & (device_fwd_li == clint_dev_gp);
       wire is_cache_fwd    = is_my_core & is_local & (device_fwd_li == cache_dev_gp);
       wire is_host_fwd     = is_my_core & is_local & (device_fwd_li == host_dev_gp);
+      wire is_dma_fwd      = is_my_core & is_local & (device_fwd_li == dma_dev_gp);
 
+      
+      
+      // device select for my device index
+      // mem_fwd_v_i 
       wire is_io_fwd       = is_host_fwd | is_other_hio | is_other_core;
       wire is_mem_fwd      = is_cache_fwd | (~is_local & ~is_io_fwd);
-      wire is_loopback_fwd = ~is_cfg_fwd & ~is_clint_fwd & ~is_mem_fwd & ~is_io_fwd;
+      
+      
+      // logic added for dma encoder, maybe this is wrong because loopback is the catch-all device?
+      //wire is_dma_fwd; // always enable dma fwd
+      wire is_loopback_fwd = ~is_cfg_fwd & ~is_clint_fwd & ~is_mem_fwd & ~is_io_fwd & ~is_dma_fwd; // added not dma fwd
+      //wire is_dma_fwd      = is_my_core & is_local & (device_fwd_li == dma_dev_gp); // need to add dma_dev_gp somewhere
 
+      initial
+        assert((is_cfg_fwd == 1'b0) & (is_clint_fwd == 1'b0) & (is_cache_fwd == 1'b0) & (is_host_fwd == 1'b0) & (is_dma_fwd == 1'b0) & (is_io_fwd == 1'b0) & (is_mem_fwd == 1'b0) & (is_loopback_fwd == 1'b0))
+      else $display("device has been hit");
+      
       bsg_encode_one_hot
-       #(.width_p(num_dev_lp), .lo_to_hi_p(1))
+       #(.width_p(num_dev_lp), .lo_to_hi_p(1)) // saying there are 5 devices because dma control not implemented yet (.width_p(num_dev_lp))
        fwd_pe
-        (.i({is_loopback_fwd, is_io_fwd, is_mem_fwd, is_clint_fwd, is_cfg_fwd})
+        (.i({is_loopback_fwd, is_io_fwd, is_dma_fwd, is_mem_fwd, is_clint_fwd, is_cfg_fwd})
          ,.addr_o(proc_fwd_dst_lo[i])
          ,.v_o()
          );
@@ -192,7 +213,8 @@ module bp_unicore
 
   // Select destination of responses. Were there a way to transpose structs...
   logic [num_dev_lp-1:0][lg_num_proc_lp-1:0] dev_rev_dst_lo;
-  assign dev_rev_dst_lo[4] = dev_rev_header_lo[4].payload.lce_id[0+:lg_num_proc_lp];
+  assign dev_rev_dst_lo[5] = dev_rev_header_lo[5].payload.lce_id[0+:lg_num_proc_lp]; // 6th device is loopback
+  assign dev_rev_dst_lo[4] = dev_rev_header_lo[4].payload.lce_id[0+:lg_num_proc_lp]; // 5th device is io
   assign dev_rev_dst_lo[3] = dev_rev_header_lo[3].payload.lce_id[0+:lg_num_proc_lp];
   assign dev_rev_dst_lo[2] = dev_rev_header_lo[2].payload.lce_id[0+:lg_num_proc_lp];
   assign dev_rev_dst_lo[1] = dev_rev_header_lo[1].payload.lce_id[0+:lg_num_proc_lp];
@@ -211,9 +233,9 @@ module bp_unicore
 
      ,.msg_header_i(proc_fwd_header_lo)
      ,.msg_data_i(proc_fwd_data_lo)
-     ,.msg_v_i(proc_fwd_v_lo)
-     ,.msg_ready_and_o(proc_fwd_ready_and_li)
-     ,.msg_last_i(proc_fwd_last_lo)
+     ,.msg_v_i(proc_fwd_v_lo) // we changed size of this
+     ,.msg_ready_and_o(proc_fwd_ready_and_li) // we changed size 
+     ,.msg_last_i(proc_fwd_last_lo) // ''
      ,.msg_dst_i(proc_fwd_dst_lo)
 
      ,.msg_header_o(dev_fwd_header_li)
@@ -242,10 +264,10 @@ module bp_unicore
      ,.msg_dst_i(dev_rev_dst_lo)
 
      ,.msg_header_o(proc_rev_header_li)
-     ,.msg_data_o(proc_rev_data_li)
-     ,.msg_v_o(proc_rev_v_li)
-     ,.msg_ready_and_i(proc_rev_ready_and_lo)
-     ,.msg_last_o(proc_rev_last_li)
+     ,.msg_data_o(proc_rev_data_li) // changed the size
+     ,.msg_v_o(proc_rev_v_li) // ''
+     ,.msg_ready_and_i(proc_rev_ready_and_lo) // '' 
+     ,.msg_last_o(proc_rev_last_li) // ''
      );
 
   logic [dword_width_gp-1:0] cfg_data_lo, cfg_data_li;
@@ -342,18 +364,44 @@ module bp_unicore
      ,.dma_data_ready_and_i(dma_data_ready_and_i)
      );
 
-  // Assign I/O as another device
-  assign mem_fwd_header_cast_o = dev_fwd_header_li[3];
-  assign mem_fwd_data_o = dev_fwd_data_li[3];
-  assign mem_fwd_v_o = dev_fwd_v_li[3];
-  assign dev_fwd_ready_and_lo[3] = mem_fwd_ready_and_i;
-  assign mem_fwd_last_o = dev_fwd_last_li[3];
+  // DMA
+  logic [63:0] dma_data_lo, dma_data_li; // dword_width_gp-1 
+  bp_dma_engine
+    #(.bp_params_p(bp_params_p))
+   dma
+    (.clk_i(clk_i)
+     ,.reset_i(reset_r)
 
-  assign dev_rev_header_lo[3] = mem_rev_header_cast_i;
-  assign dev_rev_data_lo[3] = mem_rev_data_i;
-  assign dev_rev_v_lo[3] = mem_rev_v_i;
-  assign mem_rev_ready_and_o = dev_rev_ready_and_li[3];
-  assign dev_rev_last_lo[3] = mem_rev_last_i;
+     ,.mem_fwd_header_i(dev_fwd_header_li[3])
+     ,.mem_fwd_data_i(dma_data_li)                  // 64 bits for CInt but 1 bit for loopback..
+     ,.mem_fwd_v_i(dev_fwd_v_li[3])
+     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[3])
+     ,.mem_fwd_last_i(dev_fwd_last_li[3])
+     ,.mem_rev_header_o(dev_rev_header_lo[3])
+     ,.mem_rev_data_o(dma_data_lo)
+     ,.mem_rev_v_o(dev_rev_v_lo[3])
+     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[3])
+     ,.mem_rev_last_o(dev_rev_last_lo[3])
+
+
+     );
+  assign dma_data_li = dev_fwd_data_li[3]; // local input data to dma
+  assign dev_rev_data_lo[3] = dma_data_lo; // local output data to dma
+
+  // Assign I/O as another device
+  assign mem_fwd_header_cast_o = dev_fwd_header_li[4];
+  assign mem_fwd_data_o = dev_fwd_data_li[4];
+  assign mem_fwd_v_o = dev_fwd_v_li[4];
+  assign dev_fwd_ready_and_lo[4] = mem_fwd_ready_and_i;
+  assign mem_fwd_last_o = dev_fwd_last_li[4];
+
+  assign dev_rev_header_lo[4] = mem_rev_header_cast_i;
+  assign dev_rev_data_lo[4] = mem_rev_data_i;
+  assign dev_rev_v_lo[4] = mem_rev_v_i;
+  assign mem_rev_ready_and_o = dev_rev_ready_and_li[4];
+  assign dev_rev_last_lo[4] = mem_rev_last_i;
+
+
 
   logic [dword_width_gp-1:0] loopback_data_lo, loopback_data_li;
   bp_me_loopback
@@ -362,19 +410,21 @@ module bp_unicore
     (.clk_i(clk_i)
      ,.reset_i(reset_r)
 
-     ,.mem_fwd_header_i(dev_fwd_header_li[4])
+     ,.mem_fwd_header_i(dev_fwd_header_li[5])
      ,.mem_fwd_data_i(loopback_data_li)
-     ,.mem_fwd_v_i(dev_fwd_v_li[4])
-     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[4])
-     ,.mem_fwd_last_i(dev_fwd_last_li[4])
-     ,.mem_rev_header_o(dev_rev_header_lo[4])
+     ,.mem_fwd_v_i(dev_fwd_v_li[5])
+     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[5])
+     ,.mem_fwd_last_i(dev_fwd_last_li[5])
+     ,.mem_rev_header_o(dev_rev_header_lo[5])
      ,.mem_rev_data_o(loopback_data_lo)
-     ,.mem_rev_v_o(dev_rev_v_lo[4])
-     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[4])
-     ,.mem_rev_last_o(dev_rev_last_lo[4])
+     ,.mem_rev_v_o(dev_rev_v_lo[5])
+     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[5])
+     ,.mem_rev_last_o(dev_rev_last_lo[5])
      );
-  assign loopback_data_li = dev_fwd_data_li[4];
-  assign dev_rev_data_lo[4] = loopback_data_lo;
+  assign loopback_data_li = dev_fwd_data_li[5]; // local input data to loopback
+  assign dev_rev_data_lo[5] = loopback_data_lo; // local output data to loopback
+
+  
 
 endmodule
 
