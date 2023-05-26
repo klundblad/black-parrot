@@ -12,12 +12,14 @@
   localparam cfg_dev_gp   = 2;
   localparam clint_dev_gp = 3;
   localparam cache_dev_gp = 4;
+  localparam dma_dev_gp = 5; 
 
                              // 0x00_0(nnnN)(D)(A_AAAA)
   localparam host_dev_base_addr_gp     = 32'h0010_0000;
   localparam cfg_dev_base_addr_gp      = 32'h0020_0000;
   localparam clint_dev_base_addr_gp    = 32'h0030_0000;
   localparam cache_dev_base_addr_gp    = 32'h0040_0000;
+  localparam dma_dev_base_addr_gp      = 32'h0050_0000;
 
   // TODO: This is hardcoded for a 32-bit DRAM address, will need to be adjusted
   //   for a different address space
