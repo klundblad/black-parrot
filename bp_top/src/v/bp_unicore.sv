@@ -113,6 +113,8 @@ module bp_unicore
   logic [num_proc_lp-1:0][uce_fill_width_p-1:0] proc_rev_data_li;
   logic [num_proc_lp-1:0] proc_rev_v_li, proc_rev_ready_and_lo, proc_rev_last_li;
 
+  
+  
   // {LOOPBACK, DMA, IO, L2, CLINT, CFG} added DMA as a 5th device 
   // LOOPBACK is now index 5
   // DMA is now index 4
@@ -365,25 +367,42 @@ module bp_unicore
      );
 
   // DMA
-  logic [63:0] dma_data_lo, dma_data_li; // dword_width_gp-1 
+  logic [63:0] dma_data_lo, dma_data_li, dev_rev_data_o_uce; // dword_width_gp-1 
+  // adding some extra logic for uce
+  logic dev_rev_last_o_uce, dev_fwd_ready_and_o_uce; 
+  logic [66:0] dev_fwd_header_o; 
   bp_dma_engine
     #(.bp_params_p(bp_params_p))
    dma
     (.clk_i(clk_i)
      ,.reset_i(reset_r)
 
-     ,.mem_fwd_header_i(dev_fwd_header_li[3])
-     ,.mem_fwd_data_i(dma_data_li)                  // 64 bits for CInt but 1 bit for loopback..
-     ,.mem_fwd_v_i(dev_fwd_v_li[3])
-     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[3])
-     ,.mem_fwd_last_i(dev_fwd_last_li[3])
-     ,.mem_rev_header_o(dev_rev_header_lo[3])
-     ,.mem_rev_data_o(dma_data_lo)
-     ,.mem_rev_v_o(dev_rev_v_lo[3])
-     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[3])
-     ,.mem_rev_last_o(dev_rev_last_lo[3])
+     ,.dev_fwd_header_i(dev_fwd_header_li[3])
+     ,.dev_fwd_data_i(dma_data_li)                  // 64 bits for CInt but 1 bit for loopback..
+     ,.dev_fwd_v_i(dev_fwd_v_li[3])
+     ,.dev_fwd_ready_and_o(dev_fwd_ready_and_lo[3])
+     ,.dev_fwd_last_i(dev_fwd_last_li[3])
+     ,.dev_fwd_header_o(dev_fwd_header_o)
+     ,.dev_rev_header_o(dev_rev_header_lo[3])
+     ,.dev_rev_data_o(dma_data_lo)
+     ,.dev_rev_v_o(dev_rev_v_lo[3])
+     ,.dev_rev_ready_and_i(dev_rev_ready_and_li[3])
+     ,.dev_rev_last_o(dev_rev_last_lo[3])
 
+     ,.proc_fwd_header_lo(proc_fwd_header_lo[2])
+     ,.proc_fwd_data_lo(proc_fwd_data_lo[2][0]) // not sure what the second field is for
+     ,.proc_fwd_v_lo(proc_fwd_v_lo[2])
+     ,.proc_fwd_ready_and_li(proc_fwd_ready_and_li[2])
+     ,.proc_fwd_last_lo(proc_fwd_last_lo[2])
+     ,.proc_rev_header_li(proc_rev_header_li[2])
+     ,.proc_rev_data_li(proc_rev_data_li[2][0])
+     ,.proc_rev_v_li(proc_rev_v_li[2])
+     ,.proc_rev_ready_and_lo(proc_rev_ready_and_lo[2])
+     ,.proc_rev_last_li(proc_rev_last_li[2])
 
+     ,.dev_rev_last_o_uce(dev_rev_last_o_uce)
+     ,.dev_rev_data_o_uce(dev_rev_data_o_uce)
+     ,.dev_fwd_ready_and_o_uce(dev_fwd_ready_and_o_uce) 
      );
   assign dma_data_li = dev_fwd_data_li[3]; // local input data to dma
   assign dev_rev_data_lo[3] = dma_data_lo; // local output data to dma

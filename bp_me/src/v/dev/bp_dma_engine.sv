@@ -44,22 +44,12 @@ module bp_dma_engine
    , parameter bedrock_fill_width_p = 64 // added for uce
 
   // data that that
-   , parameter dma_width_gp = 64 // the width of dma data
-   , parameter dma_assoc_p = 2 // 2 set associative? cache is not being affected
-   , parameter dma_sets_p = 2 // 2 sets?
+   , parameter dma_width_gp = 64     // the width of dma data
+   , parameter dma_assoc_p = 2       // 2 set associative? cache is not being affected
+   , parameter dma_sets_p = 2        // 2 sets?
    , parameter dma_fill_width_p = 64 // 64 bit width of the dma to match the address
    , parameter dma_ctag_width_p = 64
    , parameter dma_block_width_p = 64
-
-  //  .cmd_addr_width_p(5)
-  //       ,.cmd_data_width_p(32)
-  //       ,.rmt_addr_width_p(32)
-  //       ,.loc_addr_width_p(28)
-  //       ,.data_width_p(32)
-    
-  //       ,.stride_width_p(32)
-  //       ,.count_width_p (32)
-  //       ,.rank_p(4)
 
 
    )
@@ -67,20 +57,33 @@ module bp_dma_engine
   (  input                                               clk_i
    , input                                               reset_i
 
-   , input  [mem_fwd_header_width_lp-1:0]                mem_fwd_header_i
-   , input  [cmd_data_width_p-1:0]                       mem_fwd_data_i      // used to be [cmd_data_width_p-1:0] 
-   , input                                               mem_fwd_v_i
-   , output logic                                        mem_fwd_ready_and_o
-   , input                                               mem_fwd_last_i
+   , input  [mem_fwd_header_width_lp-1:0]                dev_fwd_header_i
+   , input  [cmd_data_width_p-1:0]                       dev_fwd_data_i      // used to be [cmd_data_width_p-1:0] 
+   , input                                               dev_fwd_v_i
+   , output logic                                        dev_fwd_ready_and_o
+   , input                                               dev_fwd_last_i
+   , output logic [66:0]                                 dev_fwd_header_o
 
-   , output logic [mem_rev_header_width_lp-1:0]          mem_rev_header_o
-   , output logic [cmd_data_width_p-1:0]                 mem_rev_data_o      // used to be [cmd_data_width_p-1:0] 
-   , output logic                                        mem_rev_v_o
-   , input                                               mem_rev_ready_and_i 
-   , output logic                                        mem_rev_last_o
+   , output logic [mem_rev_header_width_lp-1:0]          dev_rev_header_o
+   , output logic [cmd_data_width_p-1:0]                 dev_rev_data_o      // used to be [cmd_data_width_p-1:0] 
+   , output logic                                        dev_rev_v_o
+   , input                                               dev_rev_ready_and_i 
+   , output logic                                        dev_rev_last_o
    
-   
+   , input logic [66:0]                                  proc_fwd_header_lo
+   , input logic                                         proc_fwd_data_lo // 2d array
+   , input logic                                         proc_fwd_v_lo
+   , input logic                                         proc_fwd_ready_and_li
+   , input logic                                         proc_fwd_last_lo
+   , input logic [66:0]                                  proc_rev_header_li 
+   , input logic                                         proc_rev_data_li // 2d array
+   , input logic                                         proc_rev_v_li
+   , input logic                                         proc_rev_ready_and_lo
+   , input logic                                         proc_rev_last_li
 
+   , output logic                                        dev_rev_last_o_uce
+   , output logic [cmd_data_width_p-1:0]                 dev_rev_data_o_uce
+   , output logic                                        dev_fwd_ready_and_o_uce 
    );
 
   logic lce_id_li; // UCE input logic
@@ -105,6 +108,7 @@ module bp_dma_engine
   
   //`bp_cast_o(bp_dcache_req_s, cache_req);
   logic temp_ready_and_o; 
+  logic [67:0] temp_data_o; 
   // using valid and ready handshake
   bsg_fifo_1r1w_small
    #(.width_p(1+mem_fwd_header_width_lp), // size of control data, used to be $bits(bp_bedrock_mem_fwd_header_s)
@@ -114,7 +118,7 @@ module bp_dma_engine
      ,.reset_i(reset_i)
 
      ,.data_i({68'b0}) // csr data or actual data? tag data, cmd and stat, oroginally mem_fwd_data_i
-     ,.v_i(mem_fwd_v_i)
+     ,.v_i(dev_fwd_v_i)
      ,.ready_o(temp_ready_and_o)
 
      ,.data_o({temp_data_o}) // output data? connected to bp uce data_i, used to be _mem_rev_data_i
@@ -122,7 +126,7 @@ module bp_dma_engine
      ,.yumi_i(temp_mem_rev_v_o) // lce_fill_header_ready_and_i & lce_fill_header_v_o, used to be mem_rev_ready_and_i & mem_rev_v_o
      );
   
-  assign temp_mem_rev_v_o = mem_rev_v_o; 
+  
 
   `declare_bp_cfg_bus_s(vaddr_width_p, hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p);
   `declare_bp_cache_engine_if(paddr_width_p, dcache_ctag_width_p, dcache_sets_p, dcache_assoc_p, dword_width_gp, dcache_block_width_p, dcache_fill_width_p, dcache);
@@ -166,30 +170,58 @@ module bp_dma_engine
   logic dma_tag_mem_pkt_v_li, dma_tag_mem_pkt_yumi_lo; 
 
   // // uce data module logic
-  logic dma_data_mem_pkt_v_li, dma_data_mem_pkt_yumi_lo, dma_data_mem_lo;
+  logic dma_data_mem_pkt_v_li, dma_data_mem_pkt_yumi_lo;
 
   // // uce stat module logic
   logic dma_stat_mem_pkt_v_li, dma_stat_mem_pkt_yumi_lo;
   
+  // hardcoded logic for BP UCE dma 
   logic [115:0] dma_req_lo;
-  logic [1:0] dma_req_metadata_lo; //
-  logic [71:0] dma_tag_mem_pkt_li;
-  logic [66:0] dma_tag_mem_lo;
-  logic [68:0] dma_data_mem_pkt_li;
-  logic [63:0] dma_data_mem_lo;
-  logic [3:0] dma_stat_mem_pkt_li;
-  //logic [2:0] dma_stat_mem_lo;
+  logic [3:0] dma_req_metadata_lo; //
+  logic [34:0] dma_tag_mem_pkt_li;
+  logic [22:0] dma_tag_mem_lo;
+  logic [82:0] dma_data_mem_pkt_li;
+  logic [511:0] dma_data_mem_lo;
+  logic [10:0] dma_stat_mem_pkt_li;
+  logic [14:0] dma_stat_mem_lo;
   logic [66:0] temp_mem_rev_header_o, temp_mem_fwd_header_i; 
   logic [63:0] temp_mem_fwd_data_i; // temp_mem_rev_data_o, 
+  logic [63:0] temp_mem_rev_data_o; 
+
+  assign dma_req_lo = 116'b0;
+  assign dma_req_v_lo = 1'b0;
+  assign dma_req_metadata_lo = 4'b0;
+  assign dma_req_metadata_v_lo = 1'b0;
+  assign dma_tag_mem_pkt_yumi_lo = 1'b0; 
+  assign dma_tag_mem_lo = 23'b0;
+  assign dma_data_mem_pkt_yumi_lo = 1'b0;
+  assign dma_data_mem_lo = 512'b0; 
+  assign dma_stat_mem_pkt_yumi_lo = 1'b0;
+  assign dma_stat_mem_lo = 3'b0;
+
+
+  logic [66:0] mem_fwd_header_o; 
  
+  logic temp_mem_rev_v_o, temp_mem_rev_ready_and_i, temp_mem_rev_last_o,
+        temp_mem_fwd_v_i, temp_mem_fwd_ready_and_o, temp_mem_fwd_last_i; 
+
+  assign temp_mem_rev_header_o = dev_rev_header_o;
+
+  assign temp_mem_rev_v_o = dev_rev_v_o; 
+  assign temp_mem_rev_ready_and_i = dev_rev_ready_and_i; 
+  assign temp_mem_fwd_header_i = dev_fwd_header_i; 
+  assign temp_mem_fwd_data_i = dev_fwd_data_i; 
+  assign temp_mem_fwd_v_i = dev_fwd_v_i; 
+  assign temp_mem_fwd_last_i = dev_fwd_last_i; 
+
   bp_uce
    #(.bp_params_p(bp_params_p)
-     ,.assoc_p(2) // dma_assoc_p
-     ,.sets_p(2) // dma_sets_p
-     ,.block_width_p(64) // dma_block_width_p 
-     ,.fill_width_p(uce_fill_width_p)
-     ,.ctag_width_p(64) // dma_ctag_width_p
-     ,.writeback_p(2) // dma_features_p[e_cfg_writeback]
+     ,.assoc_p(dcache_assoc_p) // dma_assoc_p
+     ,.sets_p(dcache_sets_p) // dma_sets_p
+     ,.block_width_p(dcache_block_width_p) // dma_block_width_p 
+     ,.fill_width_p(bedrock_fill_width_p)
+     ,.ctag_width_p(dcache_ctag_width_p) // dma_ctag_width_p
+     ,.writeback_p(dcache_features_p[e_cfg_writeback]) // dma_features_p[e_cfg_writeback]
      ,.metadata_latency_p(1)
      )
    dma_uce
@@ -225,33 +257,20 @@ module bp_dma_engine
      ,.stat_mem_pkt_yumi_i(dma_stat_mem_pkt_yumi_lo) // dma_stat_mem_pkt_yumi_lo
      ,.stat_mem_i(dma_stat_mem_lo)                   // dma_stat_mem_lo
 
-     ,.mem_fwd_header_o(mem_fwd_header_o)       // fwd linked to rev signals?
-     ,.mem_fwd_data_o(temp_mem_rev_data_o)           
+     ,.mem_fwd_header_o(dev_fwd_header_o)       // fwd linked to rev signals?
+     ,.mem_fwd_data_o(dev_rev_data_o_uce)           
      ,.mem_fwd_v_o(temp_mem_rev_v_o)                 // mem forward valid and out, used to be _mem_fwd_v_o
      ,.mem_fwd_ready_and_i(temp_mem_rev_ready_and_i)
-     ,.mem_fwd_last_o(temp_mem_rev_last_o)
+     ,.mem_fwd_last_o(dev_rev_last_o_uce)
 
      ,.mem_rev_header_i(temp_mem_fwd_header_i)
      ,.mem_rev_data_i(temp_mem_fwd_data_i)           // connected to the data_o of the fifo
      ,.mem_rev_v_i(temp_mem_fwd_v_i)
-     ,.mem_rev_ready_and_o(temp_mem_fwd_ready_and_o)    // used to be mem_fwd_ready_and_o
+     ,.mem_rev_ready_and_o(dev_fwd_ready_and_o_uce)    // used to be mem_fwd_ready_and_o
      ,.mem_rev_last_i(temp_mem_fwd_last_i)
      );
   
-  logic [66:0] mem_fwd_header_o; 
-  logic temp_mem_rev_header_o, temp_mem_rev_v_o, temp_mem_rev_ready_and_i, temp_mem_rev_last_o,
-        temp_mem_fwd_header_i, temp_mem_fwd_data_i, temp_mem_fwd_v_i, temp_mem_fwd_ready_and_o, temp_mem_fwd_last_i; 
 
-  assign temp_mem_rev_header_o = mem_rev_header_o;
-  assign temp_mem_rev_data_o = mem_rev_data_o;
-  assign temp_mem_rev_v_o = mem_rev_v_o; 
-  assign temp_mem_rev_ready_and_i = mem_rev_ready_and_i; 
-  assign temp_mem_rev_last_o = mem_rev_last_o; 
-  assign temp_mem_fwd_header_i = mem_fwd_header_i; 
-  assign temp_mem_fwd_data_i = mem_fwd_data_i; 
-  assign temp_mem_fwd_v_i = mem_fwd_v_i; 
-  assign temp_mem_fwd_ready_and_o = mem_fwd_ready_and_o; 
-  assign temp_mem_fwd_last_i = mem_fwd_last_i; 
 
   // Control Status Register
   // CSR will take signals from the Bedrock Register and
@@ -301,6 +320,18 @@ module bp_dma_engine
 
    register
     (.*                                  // mem values which is connected to the crossbar, instantiated in module head
+        // Network-side BP-Stream interface
+     ,.mem_fwd_header_i(dev_fwd_header_i)
+     ,.mem_fwd_data_i(dev_fwd_data_i)
+     ,.mem_fwd_v_i(dev_fwd_v_i)
+     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_o)
+     ,.mem_fwd_last_i(dev_fwd_last_i)
+
+     ,.mem_rev_header_o(dev_rev_header_o)
+     ,.mem_rev_data_o(dev_rev_data_o)
+     ,.mem_rev_v_o(dev_rev_v_o)
+     ,.mem_rev_ready_and_i(dev_rev_ready_and_i)
+     ,.mem_rev_last_o(dev_rev_last_o)
      ,.r_v_o(r_v_o)                      // A bunch of read enables (CSR only supports writes)
      ,.w_v_o(cmd_v_i)                    // A bunch of write enables, one for each register (write valid out goes to CSR?)
      ,.addr_o(cmd_addr_i) 
